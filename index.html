@@ -1,0 +1,382 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Worlds</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:12px;background:#111725;color:#f5f6ff;font-family:Arial,sans-serif}
+main{max-width:620px;margin:auto}
+.panel{border:2px solid #8ee7ff;border-radius:17px;padding:14px;margin-bottom:14px;background:#1b2435}
+h1{margin:4px 0 12px;font-size:28px}
+p{color:#cbd3e4;line-height:1.45}
+select,button{font-size:16px;border-radius:10px;padding:12px;background:#29364b;color:white;border:1px solid #586985}
+select{width:100%;margin:8px 0}
+button{cursor:pointer}
+#board{display:grid;grid-template-columns:repeat(8,1fr);width:100%;aspect-ratio:1;border:3px solid #101522;border-radius:5px;overflow:hidden}
+.sq{padding:0;border:0;border-radius:0;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;position:relative;font-size:clamp(23px,7.6vw,48px);line-height:1;touch-action:manipulation}
+.sq.light{background:var(--light);color:#151925}
+.sq.dark{background:var(--dark);color:#fff}
+.sq.selected{box-shadow:inset 0 0 0 4px #ffe36c}
+.sq.target:after{content:"";position:absolute;width:24%;height:24%;border-radius:50%;background:#39d98a}
+.sq.take:after{content:"";position:absolute;inset:3px;border:4px solid #ff6476;border-radius:50%}
+.piece{position:relative;z-index:1;text-shadow:0 1px 2px #0006}
+.controls{display:flex;gap:7px;margin-top:12px}
+.controls button{flex:1;padding:11px 3px}
+#status{font-weight:bold;min-height:25px;margin-top:14px}
+.small{font-size:13px}
+</style>
+</head>
+<body>
+<main>
+<section class="panel">
+<h1>♟ Chess Worlds</h1>
+<p>Play White against a themed computer opponent. Tap a piece, then tap a highlighted square.</p>
+<label for="rival"><b>Choose your rival</b></label>
+<select id="rival">
+<option value="ice">❄ The Ice King</option>
+<option value="frog">🐸 The Frog King</option>
+<option value="zombie">🧟 The Undying</option>
+<option value="time">⌛ The Time Traveler</option>
+<option value="volcano">🌋 The Volcano Lord</option>
+<option value="forest">🌲 The Forest Guardian</option>
+<option value="ghost">👻 The Ghost</option>
+<option value="pharaoh">☀ The Pharaoh</option>
+<option value="abyss">🌑 The Abyssal King</option>
+<option value="machine">⚙ The Machinist</option>
+<option value="cosmic">🌌 The Cosmic Mind</option>
+<option value="crystal">💎 The Crystal Witch</option>
+<option value="vampire">🦇 The Vampire Count</option>
+<option value="candy">🍬 The Candy Witch</option>
+<option value="storm">⚡ The Storm King</option>
+<option value="librarian">📚 The Librarian</option>
+</select>
+<h2 id="rivalName">The Ice King</h2>
+<p id="description">A frozen blue board. The Ice King seeks captures.</p>
+<div id="board"></div>
+<div id="status">White to move</div>
+<div class="controls">
+<button id="undo">↶ Undo</button>
+<button id="restart">⟳ Restart</button>
+<button id="flip">⇅ Flip</button>
+</div>
+<p class="small">Offline prototype. Includes legal moves, check detection, promotion to queens, and a basic computer opponent. Castling and en passant aren't implemented yet. Themed squares are decorative.</p>
+</section>
+</main>
+<script>
+"use strict";
+
+const themes={
+ice:["The Ice King","A frozen blue board.","#c9f3ff","#438db8"],
+frog:["The Frog King","A murky swamp board.","#d2e9a8","#477745"],
+zombie:["The Undying","A graveyard of sickly green.","#d2dcc8","#50634f"],
+time:["The Time Traveler","A golden clockwork board.","#f5e2a2","#8c7041"],
+volcano:["The Volcano Lord","A burning lava board.","#ffd1a2","#a23c32"],
+forest:["The Forest Guardian","An ancient leafy forest.","#d3e9c2","#3b6848"],
+ghost:["The Ghost","A pale, haunted board.","#e6e7f5","#686a91"],
+pharaoh:["The Pharaoh","An ancient desert kingdom.","#f4dfb0","#9b7941"],
+abyss:["The Abyssal King","A dark, mysterious board.","#c3b6ec","#3d345f"],
+machine:["The Machinist","A steel mechanical board.","#d9e0e6","#536776"],
+cosmic:["The Cosmic Mind","A board among the stars.","#d9c9fa","#493c7b"],
+crystal:["The Crystal Witch","A sparkling crystal board.","#f3d9fa","#8c5ba6"],
+vampire:["The Vampire Count","A crimson castle board.","#f1cbd1","#7b3049"],
+candy:["The Candy Witch","A bright candy-colored board.","#ffdaec","#b65e99"],
+storm:["The Storm King","A stormy electric board.","#d7eaff","#4c638e"],
+librarian:["The Librarian","A mysterious old library.","#e8d5b8","#785e4b"]
+};
+
+const glyph={
+K:"♔",Q:"♕",R:"♖",B:"♗",N:"♘",P:"♙",
+k:"♚",q:"♛",r:"♜",b:"♝",n:"♞",p:"♟"
+};
+const names={p:"pawn",n:"knight",b:"bishop",r:"rook",q:"queen",k:"king"};
+const values={p:100,n:320,b:330,r:500,q:900,k:20000};
+const boardEl=document.getElementById("board");
+const statusEl=document.getElementById("status");
+const rivalEl=document.getElementById("rival");
+
+let board=[],turn="w",selected=-1,options=[],history=[];
+let flipped=false,gameOver=false,busy=false;
+
+function startPosition(){
+ return [..."rnbqkbnr","pppppppp","........","........",
+ "........","........","PPPPPPPP",..."RNBQKBNR"];
+}
+function color(p){
+ if(!p||p===".")return null;
+ return p===p.toUpperCase()?"w":"b";
+}
+function inside(r,c){return r>=0&&r<8&&c>=0&&c<8}
+function idx(r,c){return r*8+c}
+function coords(i){return [Math.floor(i/8),i%8]}
+function enemy(c){return c==="w"?"b":"w"}
+function pieceType(p){return p.toLowerCase()}
+
+function pseudo(pos,from){
+ const p=pos[from];
+ if(!p||p===".")return [];
+ const col=color(p),type=pieceType(p),[r,c]=coords(from);
+ const moves=[];
+ function add(rr,cc){
+  if(!inside(rr,cc))return false;
+  const to=idx(rr,cc),q=pos[to];
+  if(q==="."||color(q)!==col){
+   if(pieceType(q||".")!=="k")moves.push(to);
+   else if(!q||q===".")moves.push(to);
+  }
+  return !q||q==="";
+ }
+ if(type==="p"){
+  const d=col==="w"?-1:1,start=col==="w"?6:1;
+  const nr=r+d;
+  if(inside(nr,c)&&pos[idx(nr,c)]==="."){
+   moves.push(idx(nr,c));
+   if(r===start&&pos[idx(r+2*d,c)]===".")moves.push(idx(r+2*d,c));
+  }
+  for(const dc of [-1,1]){
+   const rr=r+d,cc=c+dc;
+   if(inside(rr,cc)){
+    const q=pos[idx(rr,cc)];
+    if(q!=="."&&color(q)===enemy(col)&&pieceType(q)!=="k")moves.push(idx(rr,cc));
+   }
+  }
+ }else if(type==="n"){
+  for(const [dr,dc] of [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]){
+   const rr=r+dr,cc=c+dc;
+   if(inside(rr,cc)){
+    const q=pos[idx(rr,cc)];
+    if(q==="."||color(q)!==col)moves.push(idx(rr,cc));
+   }
+  }
+ }else if(type==="k"){
+  for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
+   if(!dr&&!dc)continue;
+   const rr=r+dr,cc=c+dc;
+   if(inside(rr,cc)){
+    const q=pos[idx(rr,cc)];
+    if(q==="."||color(q)!==col)moves.push(idx(rr,cc));
+   }
+  }
+ }else{
+  let dirs=[];
+  if(type==="r"||type==="q")dirs.push([-1,0],[1,0],[0,-1],[0,1]);
+  if(type==="b"||type==="q")dirs.push([-1,-1],[-1,1],[1,-1],[1,1]);
+  for(const [dr,dc] of dirs){
+   let rr=r+dr,cc=c+dc;
+   while(inside(rr,cc)){
+    const to=idx(rr,cc),q=pos[to];
+    if(q===".")moves.push(to);
+    else{
+     if(color(q)!==col&&pieceType(q)!=="k")moves.push(to);
+     break;
+    }
+    rr+=dr;cc+=dc;
+   }
+  }
+ }
+ return moves;
+}
+
+function applyMove(pos,from,to){
+ const next=pos.slice(),p=next[from];
+ next[from]=".";
+ let moved=p;
+ if(p==="P"&&Math.floor(to/8)===0)moved="Q";
+ if(p==="p"&&Math.floor(to/8)===7)moved="q";
+ next[to]=moved;
+ return next;
+}
+
+function attacked(pos,target,by){
+ const [r,c]=coords(target);
+ const pawn=by==="w"?"P":"p";
+ const pr=r+(by==="w"?1:-1);
+ for(const dc of [-1,1])
+  if(inside(pr,c+dc)&&pos[idx(pr,c+dc)]===pawn)return true;
+
+ const knight=by==="w"?"N":"n";
+ for(const [dr,dc] of [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]])
+  if(inside(r+dr,c+dc)&&pos[idx(r+dr,c+dc)]===knight)return true;
+
+ const king=by==="w"?"K":"k";
+ for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++)
+  if((dr||dc)&&inside(r+dr,c+dc)&&pos[idx(r+dr,c+dc)]===king)return true;
+
+ const dirs=[
+ [-1,0,"r"],[1,0,"r"],[0,-1,"r"],[0,1,"r"],
+ [-1,-1,"b"],[-1,1,"b"],[1,-1,"b"],[1,1,"b"]
+ ];
+ for(const [dr,dc,sliding] of dirs){
+  let rr=r+dr,cc=c+dc,dist=1;
+  while(inside(rr,cc)){
+   const p=pos[idx(rr,cc)];
+   if(p!=="."){
+    if(color(p)===by){
+     const t=pieceType(p);
+     if(t==="q"||t===sliding||(dist===1&&t==="k"))return true;
+    }
+    break;
+   }
+   rr+=dr;cc+=dc;dist++;
+  }
+ }
+ return false;
+}
+
+function inCheck(pos,col){
+ const k=pos.indexOf(col==="w"?"K":"k");
+ return k<0||attacked(pos,k,enemy(col));
+}
+function legalMovesFrom(pos,from){
+ const col=color(pos[from]);
+ if(!col)return [];
+ return pseudo(pos,from).filter(to=>{
+  const next=applyMove(pos,from,to);
+  return !inCheck(next,col);
+ });
+}
+function allMoves(pos,col){
+ const out=[];
+ for(let i=0;i<64;i++){
+  if(color(pos[i])===col)
+   for(const to of legalMovesFrom(pos,i))out.push({from:i,to});
+ }
+ return out;
+}
+function gameStatus(){
+ const moves=allMoves(board,turn);
+ if(!moves.length){
+  gameOver=true;
+  return inCheck(board,turn)
+   ? (turn==="w"?"Checkmate — Black wins!":"Checkmate — White wins!")
+   : "Draw by stalemate.";
+ }
+ if(inCheck(board,turn))return (turn==="w"?"White":"Black")+" is in check!";
+ return turn==="w"?"White to move":"Computer to move";
+}
+
+function render(){
+ const t=themes[rivalEl.value]||themes.ice;
+ document.documentElement.style.setProperty("--light",t[2]);
+ document.documentElement.style.setProperty("--dark",t[3]);
+ boardEl.innerHTML="";
+ for(let display=0;display<64;display++){
+  const r=flipped?7-Math.floor(display/8):Math.floor(display/8);
+  const c=flipped?7-display%8:display%8;
+  const i=idx(r,c),p=board[i];
+  const el=document.createElement("button");
+  el.type="button";
+  el.className="sq "+((r+c)%2===0?"light":"dark");
+  if(i===selected)el.classList.add("selected");
+  if(options.includes(i))el.classList.add(p==="."?"target":"take");
+  el.setAttribute("aria-label",files[c]+(8-r)+(p==="."?" empty":" "+names[pieceType(p)]));
+  if(p!=="."){
+   const span=document.createElement("span");
+   span.className="piece";
+   span.textContent=glyph[p];
+   el.appendChild(span);
+  }
+  if(c===0||r===7){
+   const coord=document.createElement("span");
+   coord.className="coord";
+   coord.textContent=c===0?(8-r):files[c];
+   el.appendChild(coord);
+  }
+  el.addEventListener("click",()=>clickSquare(i));
+  boardEl.appendChild(el);
+ }
+}
+
+function clickSquare(i){
+ if(gameOver||busy||turn!=="w")return;
+ if(selected!==-1&&options.includes(i)){
+  const from=selected;
+  history.push({board:board.slice(),turn,gameOver});
+  board=applyMove(board,from,i);
+  selected=-1;options=[];turn="b";
+  render();
+  statusEl.textContent=gameStatus();
+  if(!gameOver)setTimeout(computerMove,180);
+  return;
+ }
+ if(color(board[i])==="w"){
+  selected=i;
+  options=legalMovesFrom(board,i);
+ }else{
+  selected=-1;options=[];
+ }
+ render();
+}
+
+function evaluate(pos){
+ let score=0;
+ for(let i=0;i<64;i++){
+  const p=pos[i];
+  if(p===".")continue;
+  const col=color(p),type=pieceType(p);
+  let v=values[type]||0;
+  const [r,c]=coords(i);
+  if(type==="p")v+=(col==="w"?6-r:r-1)*5;
+  if(type==="n"||type==="b"){
+   v+=(3.5-Math.abs(3.5-c)) * 4;
+   v+=(3.5-Math.abs(3.5-r)) * 4;
+  }
+  score+=(col==="b"?v:-v);
+ }
+ return score;
+}
+
+function computerMove(){
+ if(gameOver||turn!=="b")return;
+ busy=true;
+ statusEl.textContent="The "+themes[rivalEl.value][0]+" is thinking…";
+ const moves=allMoves(board,"b");
+ if(!moves.length){
+  busy=false;statusEl.textContent=gameStatus();return;
+ }
+ let best=-Infinity,choices=[];
+ for(const m of moves){
+  const next=applyMove(board,m.from,m.to);
+  let score=evaluate(next);
+  const captured=board[m.to];
+  if(captured!==".")score+=values[pieceType(captured)]*.7;
+  if(inCheck(next,"w"))score+=35;
+  // Add slight randomness so the computer doesn't always choose the same move.
+  score+=Math.random()*12;
+  if(score>best){best=score;choices=[m]}
+  else if(score>best-8)choices.push(m);
+ }
+ const m=choices[Math.floor(Math.random()*choices.length)];
+ history.push({board:board.slice(),turn,gameOver});
+ board=applyMove(board,m.from,m.to);
+ turn="w";selected=-1;options=[];busy=false;
+ render();
+ statusEl.textContent=gameStatus();
+}
+
+function restart(){
+ board=startPosition();turn="w";selected=-1;options=[];
+ history=[];gameOver=false;busy=false;
+ const t=themes[rivalEl.value];
+ document.getElementById("rivalName").textContent=t[0];
+ document.getElementById("description").textContent=t[1];
+ render();statusEl.textContent="White to move";
+}
+document.getElementById("restart").addEventListener("click",restart);
+document.getElementById("undo").addEventListener("click",()=>{
+ if(busy||!history.length)return;
+ const previous=history.pop();
+ board=previous.board;turn=previous.turn;gameOver=previous.gameOver;
+ selected=-1;options=[];render();statusEl.textContent=gameStatus();
+});
+document.getElementById("flip").addEventListener("click",()=>{
+ flipped=!flipped;render();
+});
+rivalEl.addEventListener("change",restart);
+
+restart();
+</script>
+</body>
+</html>
